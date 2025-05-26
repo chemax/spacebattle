@@ -8,32 +8,43 @@ import (
 
 const (
 	G             = 9.81
-	SimStep       = 0.01
-	MaxTime       = 60
-	MaxAccel      = 10 * G
-	ShipRadius    = 30.0
-	EffectiveDist = 30000.0
-	Pellets       = 24          // дробинок за выстрел
-	SpreadAngle   = math.Pi / 3 // веер картечи (30 градусов)
+	SimStep       = 0.02
+	MaxTime       = 600
+	MaxAccel      = 0.2 * G
+	ShipRadius    = 500.0
+	CubeSize      = 1e5 // 100 000 км в метрах
+	Pellets       = 3200
+	SpreadAngle   = math.Pi / 3 // 45°
+	EffectiveDist = 2e7         // 20 000 км
 )
 
-type Vec2 struct {
-	X, Y float64
+type Vec3 struct {
+	X, Y, Z float64
 }
 
-func (v Vec2) Add(v2 Vec2) Vec2     { return Vec2{v.X + v2.X, v.Y + v2.Y} }
-func (v Vec2) Sub(v2 Vec2) Vec2     { return Vec2{v.X - v2.X, v.Y - v2.Y} }
-func (v Vec2) Len() float64         { return math.Hypot(v.X, v.Y) }
-func (v Vec2) Scale(s float64) Vec2 { return Vec2{v.X * s, v.Y * s} }
-func (v Vec2) Norm() Vec2 {
+func (v Vec3) Add(b Vec3) Vec3      { return Vec3{v.X + b.X, v.Y + b.Y, v.Z + b.Z} }
+func (v Vec3) Sub(b Vec3) Vec3      { return Vec3{v.X - b.X, v.Y - b.Y, v.Z - b.Z} }
+func (v Vec3) Len() float64         { return math.Sqrt(v.X*v.X + v.Y*v.Y + v.Z*v.Z) }
+func (v Vec3) Scale(f float64) Vec3 { return Vec3{v.X * f, v.Y * f, v.Z * f} }
+func (v Vec3) Norm() Vec3 {
 	l := v.Len()
 	if l == 0 {
-		return Vec2{0, 0}
+		return Vec3{0, 0, 0}
 	}
 	return v.Scale(1.0 / l)
 }
-func (v Vec2) Rotate(rad float64) Vec2 {
-	return Vec2{v.X*math.Cos(rad) - v.Y*math.Sin(rad), v.X*math.Sin(rad) + v.Y*math.Cos(rad)}
+
+// Вращение в 3D вокруг случайной оси на угол (для рассевания)
+func (v Vec3) Rotated(spread float64) Vec3 {
+	// Случайный угол вокруг оси (Гауссов разброс в пределах spread)
+	theta := rand.NormFloat64() * (spread / 2)
+	phi := rand.Float64() * 2 * math.Pi
+	// Сферические координаты — новый вектор
+	return Vec3{
+		math.Sin(theta) * math.Cos(phi),
+		math.Sin(theta) * math.Sin(phi),
+		math.Cos(theta),
+	}.Norm()
 }
 
 type Gun struct {
@@ -44,8 +55,8 @@ type Gun struct {
 }
 
 type Projectile struct {
-	Pos        Vec2
-	Vel        Vec2
+	Pos        Vec3
+	Vel        Vec3
 	Target     *Ship
 	Damage     float64
 	Alive      bool
@@ -54,31 +65,31 @@ type Projectile struct {
 
 type Ship struct {
 	Name    string
-	Pos     Vec2
-	Vel     Vec2
+	Pos     Vec3
+	Vel     Vec3
 	Armor   float64
 	Guns    []Gun
 	Alive   bool
 	Target  *Ship
-	Evasion float64 // запас ускорения
+	Evasion float64
 }
 
 func main() {
 	ship1 := Ship{
 		Name:    "Orion",
-		Pos:     Vec2{0, 0},
-		Vel:     Vec2{0, 0},
+		Pos:     Vec3{0, 0, 0},
+		Vel:     Vec3{0, 0, 0},
 		Armor:   300,
-		Guns:    []Gun{{ROF: 0.5, ProjectileV: 3500, Damage: 40}, {ROF: 0.5, ProjectileV: 3500, Damage: 40}},
+		Guns:    []Gun{{ROF: 1, ProjectileV: 2500, Damage: 80}},
 		Alive:   true,
 		Evasion: MaxAccel,
 	}
 	ship2 := Ship{
 		Name:    "Valkyrie",
-		Pos:     Vec2{10000, 0},
-		Vel:     Vec2{0, 0},
+		Pos:     Vec3{CubeSize, CubeSize, CubeSize},
+		Vel:     Vec3{0, 0, 0},
 		Armor:   300,
-		Guns:    []Gun{{ROF: 1, ProjectileV: 2500, Damage: 60}},
+		Guns:    []Gun{{ROF: 1, ProjectileV: 2500, Damage: 80}},
 		Alive:   true,
 		Evasion: MaxAccel,
 	}
@@ -89,19 +100,16 @@ func main() {
 	t := 0.0
 
 	for ; t < MaxTime && ship1.Alive && ship2.Alive; t += SimStep {
-		// 1. Маневрируем
-		SmartManeuver(&ship1, projectiles)
-		SmartManeuver(&ship2, projectiles)
-		UpdatePhysics(&ship1)
-		UpdatePhysics(&ship2)
-		// 2. Оба стреляют картечью
-		FireShotgun(&ship1, &ship2, &projectiles, Pellets, SpreadAngle)
-		FireShotgun(&ship2, &ship1, &projectiles, Pellets, SpreadAngle)
-		// 3. Апдейт снарядов + попадания
-		projectiles = UpdateProjectiles(projectiles)
+		SmartManeuver3D(&ship1, projectiles)
+		SmartManeuver3D(&ship2, projectiles)
+		UpdatePhysics3D(&ship1)
+		UpdatePhysics3D(&ship2)
+		FireShotgun3D(&ship1, &ship2, &projectiles, Pellets, SpreadAngle)
+		FireShotgun3D(&ship2, &ship1, &projectiles, Pellets, SpreadAngle)
+		projectiles = UpdateProjectiles3D(projectiles)
 		if int(t*10)%100 == 0 {
-			fmt.Printf("t=%.0fs: %s(%.1f) <-> %s(%.1f), dist=%.1f, активных пуль: %d\n",
-				t, ship1.Name, ship1.Armor, ship2.Name, ship2.Armor, ship1.Pos.Sub(ship2.Pos).Len(), len(projectiles))
+			fmt.Printf("t=%.0fs: %s(%.1f) <-> %s(%.1f), dist=%.1fкм, активных пуль: %d\n",
+				t, ship1.Name, ship1.Armor, ship2.Name, ship2.Armor, ship1.Pos.Sub(ship2.Pos).Len()/1000, len(projectiles))
 		}
 	}
 	fmt.Printf("\nФИНАЛ:\n")
@@ -109,43 +117,47 @@ func main() {
 	fmt.Printf("%s: броня %.1f, живой: %v\n", ship2.Name, ship2.Armor, ship2.Alive)
 }
 
-// Умное маневрирование: если возможно, уходим с траектории хотя бы одного снаряда
-func SmartManeuver(ship *Ship, projectiles []Projectile) {
-	// Находим ближайшую угрозу по времени встречи
+// Манёвры: либо уклоняемся, либо летим к цели
+func SmartManeuver3D(ship *Ship, projectiles []Projectile) {
 	nearest := -1.0
-	evadeVec := Vec2{}
+	evadeVec := Vec3{}
 	for _, p := range projectiles {
 		if !p.Alive || p.Target != ship {
 			continue
 		}
 		relPos := p.Pos.Sub(ship.Pos)
 		relVel := p.Vel.Sub(ship.Vel)
-		dot := relPos.X*relVel.X + relPos.Y*relVel.Y
-		if dot >= 0 { // снаряд уже улетел или летит мимо
+		dot := relPos.X*relVel.X + relPos.Y*relVel.Y + relPos.Z*relVel.Z
+		if dot >= 0 {
 			continue
 		}
-		tImpact := -dot / (relVel.X*relVel.X + relVel.Y*relVel.Y)
-		if tImpact < 0 || tImpact > 5 { // уклоняемся только от близких угроз
+		tImpact := -dot / (relVel.X*relVel.X + relVel.Y*relVel.Y + relVel.Z*relVel.Z)
+		if tImpact < 0 || tImpact > 10 {
 			continue
 		}
-		// Сможем ли за это время "отползти" вбок?
 		maxOffset := 0.5 * MaxAccel * tImpact * tImpact
-		distToTraj := math.Abs(relPos.X*relVel.Y-relPos.Y*relVel.X) / relVel.Len()
+		// расстояние до траектории (через векторное произведение)
+		cross := Vec3{
+			relPos.Y*relVel.Z - relPos.Z*relVel.Y,
+			relPos.Z*relVel.X - relPos.X*relVel.Z,
+			relPos.X*relVel.Y - relPos.Y*relVel.X,
+		}
+		distToTraj := cross.Len() / relVel.Len()
 		if maxOffset > distToTraj-ShipRadius {
-			// Делаем уклонение "вбок" от снаряда (ортогонально его движению)
-			ortho := Vec2{-relVel.Y, relVel.X}.Norm()
-			if rand.Float64() < 0.5 {
-				ortho = ortho.Scale(-1)
-			}
-			evade := ortho.Scale(MaxAccel * SimStep)
-			// выбираем самое угрожающее направление
+			// Уклоняемся по случайному ортогональному направлению
+			randVec := Vec3{rand.Float64() - 0.5, rand.Float64() - 0.5, rand.Float64() - 0.5}.Norm()
+			ortho := relVel.Norm()
+			evade := Vec3{
+				ortho.Y*randVec.Z - ortho.Z*randVec.Y,
+				ortho.Z*randVec.X - ortho.X*randVec.Z,
+				ortho.X*randVec.Y - ortho.Y*randVec.X,
+			}.Norm().Scale(MaxAccel * SimStep)
 			if nearest < 0 || tImpact < nearest {
 				evadeVec = evade
 				nearest = tImpact
 			}
 		}
 	}
-	// Двигаемся: если нет угроз — двигаемся к цели
 	if nearest < 0 {
 		if ship.Target != nil && ship.Target.Alive {
 			dir := ship.Target.Pos.Sub(ship.Pos).Norm()
@@ -156,13 +168,13 @@ func SmartManeuver(ship *Ship, projectiles []Projectile) {
 	}
 }
 
-// Физика движения
-func UpdatePhysics(ship *Ship) {
+// 3D обновление позиции
+func UpdatePhysics3D(ship *Ship) {
 	ship.Pos = ship.Pos.Add(ship.Vel.Scale(SimStep))
 }
 
-// Веерная стрельба
-func FireShotgun(attacker, defender *Ship, projectiles *[]Projectile, nPellets int, spreadAngle float64) {
+// Веерная стрельба в 3D
+func FireShotgun3D(attacker, defender *Ship, projectiles *[]Projectile, nPellets int, spreadAngle float64) {
 	if !attacker.Alive || !defender.Alive {
 		return
 	}
@@ -176,11 +188,10 @@ func FireShotgun(attacker, defender *Ship, projectiles *[]Projectile, nPellets i
 		if gun.Reload <= 0 {
 			gun.Reload = 1.0 / gun.ROF
 			dir := defender.Pos.Sub(attacker.Pos).Norm()
-			baseAngle := math.Atan2(dir.Y, dir.X)
 			for n := 0; n < nPellets; n++ {
-				angle := baseAngle + (rand.Float64()-0.5)*spreadAngle
-				pelletDir := Vec2{math.Cos(angle), math.Sin(angle)}
-				projVel := pelletDir.Scale(gun.ProjectileV).Add(attacker.Vel)
+				// 3D рассеивание (любой рандомный угол в пределах SpreadAngle)
+				spreadDir := Random3DSpread(dir, spreadAngle)
+				projVel := spreadDir.Scale(gun.ProjectileV).Add(attacker.Vel)
 				*projectiles = append(*projectiles, Projectile{
 					Pos:    attacker.Pos,
 					Vel:    projVel,
@@ -193,8 +204,38 @@ func FireShotgun(attacker, defender *Ship, projectiles *[]Projectile, nPellets i
 	}
 }
 
-// Снаряды: обновление и попадания
-func UpdateProjectiles(projectiles []Projectile) []Projectile {
+// 3D рассеивание вокруг основного направления
+func Random3DSpread(dir Vec3, angle float64) Vec3 {
+	// Ортонормированный базис: dir, ortho1, ortho2
+	var ortho1 Vec3
+	if math.Abs(dir.X) < 0.5 {
+		ortho1 = Vec3{1, 0, 0}
+	} else if math.Abs(dir.Y) < 0.5 {
+		ortho1 = Vec3{0, 1, 0}
+	} else {
+		ortho1 = Vec3{0, 0, 1}
+	}
+	ortho1 = Cross(dir, ortho1).Norm()
+	ortho2 := Cross(dir, ortho1).Norm()
+	phi := rand.Float64() * 2 * math.Pi
+	theta := (rand.Float64() - 0.5) * angle
+	// Смещаем на угол theta от dir в случайном направлении
+	return dir.Scale(math.Cos(theta)).
+		Add(ortho1.Scale(math.Sin(theta) * math.Cos(phi))).
+		Add(ortho2.Scale(math.Sin(theta) * math.Sin(phi))).Norm()
+}
+
+// Векторное произведение
+func Cross(a, b Vec3) Vec3 {
+	return Vec3{
+		a.Y*b.Z - a.Z*b.Y,
+		a.Z*b.X - a.X*b.Z,
+		a.X*b.Y - a.Y*b.X,
+	}
+}
+
+// Апдейт снарядов и попадания/уничтожение вышедших за пределы куба
+func UpdateProjectiles3D(projectiles []Projectile) []Projectile {
 	newProj := projectiles[:0]
 	for i := range projectiles {
 		p := &projectiles[i]
@@ -203,14 +244,13 @@ func UpdateProjectiles(projectiles []Projectile) []Projectile {
 		}
 		p.Pos = p.Pos.Add(p.Vel.Scale(SimStep))
 		p.FlightTime += SimStep
-		// Попадание?
 		if p.Pos.Sub(p.Target.Pos).Len() <= ShipRadius {
-			ApplyDamage(p.Target, p.Damage)
+			ApplyDamage3D(p.Target, p.Damage)
 			p.Alive = false
 			continue
 		}
-		// Самоуничтожение снаряда если слишком долго летит (20 км)
-		if p.FlightTime > EffectiveDist/p.Vel.Len()+1 {
+		// Удалить если вышел за пределы куба (0...CubeSize)
+		if !InCube(p.Pos) {
 			p.Alive = false
 			continue
 		}
@@ -219,7 +259,11 @@ func UpdateProjectiles(projectiles []Projectile) []Projectile {
 	return newProj
 }
 
-func ApplyDamage(ship *Ship, dmg float64) {
+func InCube(pos Vec3) bool {
+	return pos.X >= 0 && pos.Y >= 0 && pos.Z >= 0 && pos.X <= CubeSize && pos.Y <= CubeSize && pos.Z <= CubeSize
+}
+
+func ApplyDamage3D(ship *Ship, dmg float64) {
 	if ship.Armor > dmg {
 		ship.Armor -= dmg
 	} else {
