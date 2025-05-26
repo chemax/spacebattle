@@ -4,18 +4,22 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"runtime"
+	"sync"
 )
 
 const (
-	G             = 9.81
-	SimStep       = 0.02
-	MaxTime       = 600
-	MaxAccel      = 0.2 * G
-	ShipRadius    = 500.0
-	CubeSize      = 1e5 // 100 000 км в метрах
-	Pellets       = 3200
-	SpreadAngle   = math.Pi / 3 // 45°
-	EffectiveDist = 2e7         // 20 000 км
+	G                = 9.81
+	SimStep          = 0.2
+	MaxTime          = 600
+	MaxAccel         = 0.2 * G
+	ShipRadius       = 500.0
+	CubeSize         = 1e5 // 100 000 км в метрах
+	Pellets          = 1600
+	SpreadAngle      = math.Pi / 4 // 45°
+	EffectiveDist    = 2e7         // 20 000 км
+	NWorkers         = 8           // Количество параллельных горутин
+	PelletsBatchSize = 5000
 )
 
 type Vec3 struct {
@@ -36,10 +40,8 @@ func (v Vec3) Norm() Vec3 {
 
 // Вращение в 3D вокруг случайной оси на угол (для рассевания)
 func (v Vec3) Rotated(spread float64) Vec3 {
-	// Случайный угол вокруг оси (Гауссов разброс в пределах spread)
 	theta := rand.NormFloat64() * (spread / 2)
 	phi := rand.Float64() * 2 * math.Pi
-	// Сферические координаты — новый вектор
 	return Vec3{
 		math.Sin(theta) * math.Cos(phi),
 		math.Sin(theta) * math.Sin(phi),
@@ -74,6 +76,11 @@ type Ship struct {
 	Evasion float64
 }
 
+type Hit struct {
+	Target *Ship
+	Damage float64
+}
+
 func main() {
 	ship1 := Ship{
 		Name:    "Orion",
@@ -106,7 +113,8 @@ func main() {
 		UpdatePhysics3D(&ship2)
 		FireShotgun3D(&ship1, &ship2, &projectiles, Pellets, SpreadAngle)
 		FireShotgun3D(&ship2, &ship1, &projectiles, Pellets, SpreadAngle)
-		projectiles = UpdateProjectiles3D(projectiles)
+		projectiles, hits := UpdateProjectiles3DWorkerPool(projectiles, PelletsBatchSize)
+		ApplyHits(hits)
 		if int(t*10)%100 == 0 {
 			fmt.Printf("t=%.0fs: %s(%.1f) <-> %s(%.1f), dist=%.1fкм, активных пуль: %d\n",
 				t, ship1.Name, ship1.Armor, ship2.Name, ship2.Armor, ship1.Pos.Sub(ship2.Pos).Len()/1000, len(projectiles))
@@ -136,7 +144,6 @@ func SmartManeuver3D(ship *Ship, projectiles []Projectile) {
 			continue
 		}
 		maxOffset := 0.5 * MaxAccel * tImpact * tImpact
-		// расстояние до траектории (через векторное произведение)
 		cross := Vec3{
 			relPos.Y*relVel.Z - relPos.Z*relVel.Y,
 			relPos.Z*relVel.X - relPos.X*relVel.Z,
@@ -144,7 +151,6 @@ func SmartManeuver3D(ship *Ship, projectiles []Projectile) {
 		}
 		distToTraj := cross.Len() / relVel.Len()
 		if maxOffset > distToTraj-ShipRadius {
-			// Уклоняемся по случайному ортогональному направлению
 			randVec := Vec3{rand.Float64() - 0.5, rand.Float64() - 0.5, rand.Float64() - 0.5}.Norm()
 			ortho := relVel.Norm()
 			evade := Vec3{
@@ -168,7 +174,6 @@ func SmartManeuver3D(ship *Ship, projectiles []Projectile) {
 	}
 }
 
-// 3D обновление позиции
 func UpdatePhysics3D(ship *Ship) {
 	ship.Pos = ship.Pos.Add(ship.Vel.Scale(SimStep))
 }
@@ -189,7 +194,6 @@ func FireShotgun3D(attacker, defender *Ship, projectiles *[]Projectile, nPellets
 			gun.Reload = 1.0 / gun.ROF
 			dir := defender.Pos.Sub(attacker.Pos).Norm()
 			for n := 0; n < nPellets; n++ {
-				// 3D рассеивание (любой рандомный угол в пределах SpreadAngle)
 				spreadDir := Random3DSpread(dir, spreadAngle)
 				projVel := spreadDir.Scale(gun.ProjectileV).Add(attacker.Vel)
 				*projectiles = append(*projectiles, Projectile{
@@ -206,7 +210,6 @@ func FireShotgun3D(attacker, defender *Ship, projectiles *[]Projectile, nPellets
 
 // 3D рассеивание вокруг основного направления
 func Random3DSpread(dir Vec3, angle float64) Vec3 {
-	// Ортонормированный базис: dir, ortho1, ortho2
 	var ortho1 Vec3
 	if math.Abs(dir.X) < 0.5 {
 		ortho1 = Vec3{1, 0, 0}
@@ -219,7 +222,6 @@ func Random3DSpread(dir Vec3, angle float64) Vec3 {
 	ortho2 := Cross(dir, ortho1).Norm()
 	phi := rand.Float64() * 2 * math.Pi
 	theta := (rand.Float64() - 0.5) * angle
-	// Смещаем на угол theta от dir в случайном направлении
 	return dir.Scale(math.Cos(theta)).
 		Add(ortho1.Scale(math.Sin(theta) * math.Cos(phi))).
 		Add(ortho2.Scale(math.Sin(theta) * math.Sin(phi))).Norm()
@@ -234,40 +236,191 @@ func Cross(a, b Vec3) Vec3 {
 	}
 }
 
-// Апдейт снарядов и попадания/уничтожение вышедших за пределы куба
-func UpdateProjectiles3D(projectiles []Projectile) []Projectile {
-	newProj := projectiles[:0]
-	for i := range projectiles {
-		p := &projectiles[i]
-		if !p.Alive || !p.Target.Alive {
-			continue
-		}
-		p.Pos = p.Pos.Add(p.Vel.Scale(SimStep))
-		p.FlightTime += SimStep
-		if p.Pos.Sub(p.Target.Pos).Len() <= ShipRadius {
-			ApplyDamage3D(p.Target, p.Damage)
-			p.Alive = false
-			continue
-		}
-		// Удалить если вышел за пределы куба (0...CubeSize)
-		if !InCube(p.Pos) {
-			p.Alive = false
-			continue
-		}
-		newProj = append(newProj, *p)
+// --- ПАРАЛЛЕЛЬНЫЙ АПДЕЙТ СНАРЯДОВ ---
+func UpdateProjectiles3DParallel(projectiles []Projectile) ([]Projectile, []Hit) {
+	type result struct {
+		newProj []Projectile
+		hits    []Hit
 	}
-	return newProj
+	var wg sync.WaitGroup
+	nThreads := NWorkers
+	chunkSize := (len(projectiles) + nThreads - 1) / nThreads
+	resChan := make(chan result, nThreads)
+
+	for t := 0; t < nThreads; t++ {
+		start := t * chunkSize
+		end := start + chunkSize
+		if end > len(projectiles) {
+			end = len(projectiles)
+		}
+		if start >= len(projectiles) {
+			break
+		}
+		wg.Add(1)
+		go func(sub []Projectile) {
+			defer wg.Done()
+			localProj := []Projectile{}
+			localHits := []Hit{}
+			for i := range sub {
+				p := &sub[i]
+				if !p.Alive || !p.Target.Alive {
+					continue
+				}
+				p.Pos = p.Pos.Add(p.Vel.Scale(SimStep))
+				p.FlightTime += SimStep
+				if p.Pos.Sub(p.Target.Pos).Len() <= ShipRadius {
+					localHits = append(localHits, Hit{Target: p.Target, Damage: p.Damage})
+					p.Alive = false
+					continue
+				}
+				if !InCube(p.Pos) {
+					p.Alive = false
+					continue
+				}
+				localProj = append(localProj, *p)
+			}
+			resChan <- result{newProj: localProj, hits: localHits}
+		}(projectiles[start:end])
+	}
+	wg.Wait()
+	close(resChan)
+	newProj := []Projectile{}
+	hits := []Hit{}
+	for r := range resChan {
+		newProj = append(newProj, r.newProj...)
+		hits = append(hits, r.hits...)
+	}
+	return newProj, hits
+}
+
+// Применяем урон после всех расчётов (чтобы race condition не было)
+func ApplyHits(hits []Hit) {
+	for _, hit := range hits {
+		if hit.Target.Alive && hit.Target.Armor > hit.Damage {
+			hit.Target.Armor -= hit.Damage
+		} else if hit.Target.Alive {
+			hit.Target.Armor = 0
+			hit.Target.Alive = false
+		}
+	}
 }
 
 func InCube(pos Vec3) bool {
 	return pos.X >= 0 && pos.Y >= 0 && pos.Z >= 0 && pos.X <= CubeSize && pos.Y <= CubeSize && pos.Z <= CubeSize
 }
 
-func ApplyDamage3D(ship *Ship, dmg float64) {
-	if ship.Armor > dmg {
-		ship.Armor -= dmg
-	} else {
-		ship.Armor = 0
-		ship.Alive = false
+func UpdateProjectiles3DBatched(projectiles []Projectile, batchSize int) ([]Projectile, []Hit) {
+	type result struct {
+		newProj []Projectile
+		hits    []Hit
 	}
+	resChan := make(chan result, (len(projectiles)+batchSize-1)/batchSize)
+	var wg sync.WaitGroup
+
+	for i := 0; i < len(projectiles); i += batchSize {
+		end := i + batchSize
+		if end > len(projectiles) {
+			end = len(projectiles)
+		}
+		wg.Add(1)
+		go func(sub []Projectile) {
+			defer wg.Done()
+			localProj := make([]Projectile, 0, len(sub))
+			localHits := make([]Hit, 0, 4)
+			for j := range sub {
+				p := &sub[j]
+				if !p.Alive || !p.Target.Alive {
+					continue
+				}
+				p.Pos = p.Pos.Add(p.Vel.Scale(SimStep))
+				p.FlightTime += SimStep
+				if p.Pos.Sub(p.Target.Pos).Len() <= ShipRadius {
+					localHits = append(localHits, Hit{Target: p.Target, Damage: p.Damage})
+					p.Alive = false
+					continue
+				}
+				if !InCube(p.Pos) {
+					p.Alive = false
+					continue
+				}
+				localProj = append(localProj, *p)
+			}
+			resChan <- result{newProj: localProj, hits: localHits}
+		}(projectiles[i:end])
+	}
+
+	wg.Wait()
+	close(resChan)
+
+	newProj := make([]Projectile, 0, len(projectiles))
+	hits := []Hit{}
+	for r := range resChan {
+		newProj = append(newProj, r.newProj...)
+		hits = append(hits, r.hits...)
+	}
+	return newProj, hits
+}
+
+func UpdateProjectiles3DWorkerPool(projectiles []Projectile, batchSize int) ([]Projectile, []Hit) {
+	type job struct {
+		batch []Projectile
+	}
+	type result struct {
+		newProj []Projectile
+		hits    []Hit
+	}
+
+	numWorkers := runtime.NumCPU() // или чуть больше
+	jobs := make(chan job)
+	results := make(chan result)
+
+	// стартуем фиксированный пул воркеров
+	for w := 0; w < numWorkers; w++ {
+		go func() {
+			for j := range jobs {
+				localProj := make([]Projectile, 0, len(j.batch))
+				localHits := make([]Hit, 0, 4)
+				for i := range j.batch {
+					p := &j.batch[i]
+					if !p.Alive || !p.Target.Alive {
+						continue
+					}
+					p.Pos = p.Pos.Add(p.Vel.Scale(SimStep))
+					p.FlightTime += SimStep
+					if p.Pos.Sub(p.Target.Pos).Len() <= ShipRadius {
+						localHits = append(localHits, Hit{Target: p.Target, Damage: p.Damage})
+						p.Alive = false
+						continue
+					}
+					if !InCube(p.Pos) {
+						p.Alive = false
+						continue
+					}
+					localProj = append(localProj, *p)
+				}
+				results <- result{newProj: localProj, hits: localHits}
+			}
+		}()
+	}
+
+	go func() {
+		for i := 0; i < len(projectiles); i += batchSize {
+			end := i + batchSize
+			if end > len(projectiles) {
+				end = len(projectiles)
+			}
+			jobs <- job{batch: projectiles[i:end]}
+		}
+		close(jobs)
+	}()
+
+	newProj := make([]Projectile, 0, len(projectiles))
+	hits := []Hit{}
+	numBatches := (len(projectiles) + batchSize - 1) / batchSize
+	for i := 0; i < numBatches; i++ {
+		r := <-results
+		newProj = append(newProj, r.newProj...)
+		hits = append(hits, r.hits...)
+	}
+	return newProj, hits
 }
