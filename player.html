@@ -151,9 +151,9 @@
     // Animate slider
     (function animate(){
         requestAnimationFrame(animate);
-        if (!playing || !frames.length) return;
+        // Рисуй кадр всегда (даже на паузе)
         drawFrame(current);
-        controls.update(); // И тут, чтобы все работало плавно
+        controls.update();
     })();
 </script>
 </body>

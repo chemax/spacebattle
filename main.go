@@ -19,7 +19,7 @@ const (
 	CubeSize         = 1e5 // 100 000 км в метрах
 	Pellets          = 20
 	SpreadAngle      = math.Pi / 4 // 45°
-	EffectiveDist    = 2e7         // 20 000 км
+	EffectiveDist    = 100000      // 20 000 км
 	NWorkers         = 8           // Количество параллельных горутин
 	PelletsBatchSize = 5000
 	ProjectileV      = 3500
