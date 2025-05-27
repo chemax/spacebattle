@@ -15,7 +15,7 @@ const (
 	MaxAccel         = 0.2 * G
 	ShipRadius       = 500.0
 	CubeSize         = 1e5 // 100 000 км в метрах
-	Pellets          = 1600
+	Pellets          = 200
 	SpreadAngle      = math.Pi / 4 // 45°
 	EffectiveDist    = 2e7         // 20 000 км
 	NWorkers         = 8           // Количество параллельных горутин
@@ -87,7 +87,7 @@ func main() {
 		Pos:     Vec3{0, 0, 0},
 		Vel:     Vec3{0, 0, 0},
 		Armor:   300,
-		Guns:    []Gun{{ROF: 1, ProjectileV: 2500, Damage: 80}},
+		Guns:    []Gun{{ROF: 1, ProjectileV: 2500, Damage: 240}},
 		Alive:   true,
 		Evasion: MaxAccel,
 	}
@@ -96,7 +96,7 @@ func main() {
 		Pos:     Vec3{CubeSize, CubeSize, CubeSize},
 		Vel:     Vec3{0, 0, 0},
 		Armor:   300,
-		Guns:    []Gun{{ROF: 1, ProjectileV: 2500, Damage: 80}},
+		Guns:    []Gun{{ROF: 1, ProjectileV: 2500, Damage: 240}},
 		Alive:   true,
 		Evasion: MaxAccel,
 	}
