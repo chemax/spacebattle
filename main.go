@@ -22,6 +22,7 @@ const (
 	EffectiveDist    = 2e7         // 20 000 км
 	NWorkers         = 8           // Количество параллельных горутин
 	PelletsBatchSize = 5000
+	ProjectileV      = 5000
 )
 
 type ShipSnapshot struct {
@@ -33,9 +34,10 @@ type ShipSnapshot struct {
 	Alive bool    `json:"alive"`
 }
 type ProjectileSnapshot struct {
-	X float64 `json:"x"`
-	Y float64 `json:"y"`
-	Z float64 `json:"z"`
+	X     float64 `json:"x"`
+	Y     float64 `json:"y"`
+	Z     float64 `json:"z"`
+	Owner string  `json:"owner"`
 }
 type Frame struct {
 	T           float64              `json:"t"`
@@ -81,6 +83,7 @@ type Projectile struct {
 	Pos        Vec3
 	Vel        Vec3
 	Target     *Ship
+	Owner      *Ship
 	Damage     float64
 	Alive      bool
 	FlightTime float64
@@ -108,7 +111,7 @@ func main() {
 		Pos:     Vec3{0, 0, 0},
 		Vel:     Vec3{0, 0, 0},
 		Armor:   300,
-		Guns:    []Gun{{ROF: 1, ProjectileV: 2500, Damage: 240}},
+		Guns:    []Gun{{ROF: 1, ProjectileV: ProjectileV, Damage: 240}},
 		Alive:   true,
 		Evasion: MaxAccel,
 	}
@@ -117,7 +120,7 @@ func main() {
 		Pos:     Vec3{CubeSize, CubeSize, CubeSize},
 		Vel:     Vec3{0, 0, 0},
 		Armor:   300,
-		Guns:    []Gun{{ROF: 1, ProjectileV: 2500, Damage: 240}},
+		Guns:    []Gun{{ROF: 1, ProjectileV: ProjectileV, Damage: 240}},
 		Alive:   true,
 		Evasion: MaxAccel,
 	}
@@ -163,12 +166,13 @@ func main() {
 			},
 			Projectiles: make([]ProjectileSnapshot, 0, len(projectiles)),
 		}
-		for _, p := range projectiles {
-			if p.Alive {
-				frame.Projectiles = append(frame.Projectiles, ProjectileSnapshot{X: p.Pos.X, Y: p.Pos.Y, Z: p.Pos.Z})
-			}
-		}
 		if int(t*10)%10 == 0 { // или просто if tick % N == 0
+			for _, p := range projectiles {
+				if p.Alive {
+					frame.Projectiles = append(frame.Projectiles, ProjectileSnapshot{X: p.Pos.X, Y: p.Pos.Y, Z: p.Pos.Z, Owner: p.Owner.Name})
+				}
+			}
+
 			frames = append(frames, frame)
 		}
 	}
@@ -266,6 +270,7 @@ func FireShotgun3D(attacker, defender *Ship, projectiles *[]Projectile, nPellets
 					Target: defender,
 					Damage: gun.Damage / float64(nPellets),
 					Alive:  true,
+					Owner:  attacker,
 				})
 			}
 		}

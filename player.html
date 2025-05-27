@@ -26,6 +26,11 @@
     let interval;
     let slider = document.getElementById('slider');
     let timeLabel = document.getElementById('time');
+    let colorMap = {
+        "Orion": 0xffc040, // Первый корабль
+        "Valkyrie": 0x00bfff, // Второй корабль
+    };
+    let trajectoryLines = [null, null]; // для двух кораблей
 
     // Загружаем battle.json
     fetch('battle.json')
@@ -96,6 +101,34 @@
             m.material.transparent = !s.alive;
             m.scale.set(1,1,1).multiplyScalar(1 + (s.hp / 500));
         });
+        // === ТРАЕКТОРИЯ КОРАБЛЕЙ ===
+        for (let si = 0; si < frame.ships.length; ++si) {
+            // Собираем массив позиций от начала до текущего кадра
+            let positions = [];
+            for (let f = 0; f <= idx; f++) {
+                let s = frames[f].ships[si];
+                positions.push(new THREE.Vector3(s.x, s.y, s.z));
+            }
+
+            // Удаляем старую линию, если была
+            if (trajectoryLines[si]) {
+                scene.remove(trajectoryLines[si]);
+            }
+
+            // Рисуем новую линию
+            let geometry = new THREE.BufferGeometry().setFromPoints(positions);
+            let material = new THREE.LineBasicMaterial({
+                color: si == 0 ? 0x00ff80 : 0x00aaff, // цвета как у кораблей
+                linewidth: 3,
+                opacity: 0.8,
+                transparent: true,
+                // Если хочешь пунктир — раскомментируй ниже и замени Line на LineDashedMaterial/LineSegments!
+                // dashSize: 500, gapSize: 200
+            });
+            let line = new THREE.Line(geometry, material);
+            scene.add(line);
+            trajectoryLines[si] = line;
+        }
         // Projectiles
         while (projectilesGroup.children.length > frame.projectiles.length)
             projectilesGroup.remove(projectilesGroup.children[projectilesGroup.children.length-1]);
@@ -109,6 +142,7 @@
             let p = frame.projectiles[i];
             let mesh = projectilesGroup.children[i];
             mesh.position.set(p.x, p.y, p.z);
+            mesh.material.color.set(colorMap[p.owner] || 0xffffff);
         }
         renderer.render(scene, camera);
         controls.update(); // Обновляем управление камерой!
