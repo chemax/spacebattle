@@ -12,17 +12,17 @@ import (
 
 const (
 	G                = 9.81
-	SimStep          = 0.2
+	SimStep          = 0.01
 	MaxTime          = 600
-	MaxAccel         = 0.2 * G
+	MaxAccel         = 1 * G
 	ShipRadius       = 500.0
 	CubeSize         = 1e5 // 100 000 км в метрах
-	Pellets          = 200
+	Pellets          = 20
 	SpreadAngle      = math.Pi / 4 // 45°
 	EffectiveDist    = 2e7         // 20 000 км
 	NWorkers         = 8           // Количество параллельных горутин
 	PelletsBatchSize = 5000
-	ProjectileV      = 5000
+	ProjectileV      = 3500
 )
 
 type ShipSnapshot struct {
