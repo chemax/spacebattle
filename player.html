@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Space Battle Player</title>
+    <style>
+        body { margin: 0; background: #222; }
+        #ui { position: absolute; top: 10px; left: 10px; color: #fff; z-index: 2; }
+        #canvas { display: block; }
+    </style>
+</head>
+<body>
+<div id="ui">
+    <button id="play">Play</button>
+    <button id="pause">Pause</button>
+    <input type="range" id="slider" min="0" max="0" value="0" style="width:300px;">
+    <span id="time"></span>
+</div>
+<!-- ОБЯЗАТЕЛЬНО такой порядок! -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.140.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.140.0/examples/js/controls/OrbitControls.min.js"></script>
+<script>
+    let frames = [];
+    let current = 0;
+    let playing = false;
+    let interval;
+    let slider = document.getElementById('slider');
+    let timeLabel = document.getElementById('time');
+
+    // Загружаем battle.json
+    fetch('battle.json')
+        .then(resp => resp.json())
+        .then(data => {
+            frames = data;
+            slider.max = frames.length - 1;
+            drawFrame(0);
+        });
+
+    document.getElementById('play').onclick = () => { playing = true; play(); };
+    document.getElementById('pause').onclick = () => { playing = false; clearInterval(interval); };
+    slider.oninput = e => { current = parseInt(slider.value); drawFrame(current); };
+
+    function play() {
+        interval = setInterval(() => {
+            if (!playing || !frames.length) return;
+            if (current >= frames.length-1) { playing = false; clearInterval(interval); return; }
+            drawFrame(++current);
+            slider.value = current;
+        }, 33);
+    }
+
+    // --- three.js scene setup ---
+    let scene = new THREE.Scene();
+    let camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 1, 1000000);
+    camera.position.set(0, -3000, 3000);
+    camera.lookAt(0,0,0);
+    let renderer = new THREE.WebGLRenderer({antialias:true});
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setClearColor(0x222222);
+    document.body.appendChild(renderer.domElement);
+
+    // === ЭТО РАБОТАЕТ в 0.140.0 и ряде других версий ===
+    let controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.15;
+    controls.screenSpacePanning = true;
+    controls.minDistance = 500;
+    controls.maxDistance = 30000;
+
+    // Ships as spheres, projectiles as small spheres (or points)
+    let shipMeshes = [
+        new THREE.Mesh(new THREE.SphereGeometry(200, 32, 16), new THREE.MeshLambertMaterial({color:0x00ff80})),
+        new THREE.Mesh(new THREE.SphereGeometry(200, 32, 16), new THREE.MeshLambertMaterial({color:0x00aaff}))
+    ];
+    scene.add(shipMeshes[0]); scene.add(shipMeshes[1]);
+
+    let projectilesGroup = new THREE.Group();
+    scene.add(projectilesGroup);
+
+    // Light
+    let light = new THREE.PointLight(0xffffff, 2, 100000);
+    light.position.set(0,0,3000);
+    scene.add(light);
+
+    // Draw single frame
+    function drawFrame(idx) {
+        if (!frames.length) return;
+        let frame = frames[idx];
+        timeLabel.textContent = "t: " + frame.t.toFixed(1) + "s";
+        // Ships
+        frame.ships.forEach((s, i) => {
+            let m = shipMeshes[i];
+            m.position.set(s.x, s.y, s.z);
+            m.material.color.set(s.alive ? (i==0 ? 0x00ff80 : 0x00aaff) : 0x333333);
+            m.material.opacity = s.alive ? 1.0 : 0.5;
+            m.material.transparent = !s.alive;
+            m.scale.set(1,1,1).multiplyScalar(1 + (s.hp / 500));
+        });
+        // Projectiles
+        while (projectilesGroup.children.length > frame.projectiles.length)
+            projectilesGroup.remove(projectilesGroup.children[projectilesGroup.children.length-1]);
+        while (projectilesGroup.children.length < frame.projectiles.length) {
+            let mesh = new THREE.Mesh(
+                new THREE.SphereGeometry(40, 8, 8),
+                new THREE.MeshBasicMaterial({color: 0xffc040}));
+            projectilesGroup.add(mesh);
+        }
+        for (let i = 0; i < frame.projectiles.length; ++i) {
+            let p = frame.projectiles[i];
+            let mesh = projectilesGroup.children[i];
+            mesh.position.set(p.x, p.y, p.z);
+        }
+        renderer.render(scene, camera);
+        controls.update(); // Обновляем управление камерой!
+    }
+
+    // Animate slider
+    (function animate(){
+        requestAnimationFrame(animate);
+        if (!playing || !frames.length) return;
+        drawFrame(current);
+        controls.update(); // И тут, чтобы все работало плавно
+    })();
+</script>
+</body>
+</html>

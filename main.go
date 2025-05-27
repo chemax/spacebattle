@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
+	"os"
 	"runtime"
 	"sync"
 )
@@ -21,6 +23,25 @@ const (
 	NWorkers         = 8           // Количество параллельных горутин
 	PelletsBatchSize = 5000
 )
+
+type ShipSnapshot struct {
+	Name  string  `json:"name"`
+	X     float64 `json:"x"`
+	Y     float64 `json:"y"`
+	Z     float64 `json:"z"`
+	HP    float64 `json:"hp"`
+	Alive bool    `json:"alive"`
+}
+type ProjectileSnapshot struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
+}
+type Frame struct {
+	T           float64              `json:"t"`
+	Ships       []ShipSnapshot       `json:"ships"`
+	Projectiles []ProjectileSnapshot `json:"projectiles"`
+}
 
 type Vec3 struct {
 	X, Y, Z float64
@@ -106,6 +127,7 @@ func main() {
 	projectiles := []Projectile{}
 	t := 0.0
 
+	var frames []Frame
 	for ; t < MaxTime && ship1.Alive && ship2.Alive; t += SimStep {
 		SmartManeuver3D(&ship1, projectiles)
 		SmartManeuver3D(&ship2, projectiles)
@@ -119,10 +141,52 @@ func main() {
 			fmt.Printf("t=%.0fs: %s(%.1f) <-> %s(%.1f), dist=%.1fкм, активных пуль: %d\n",
 				t, ship1.Name, ship1.Armor, ship2.Name, ship2.Armor, ship1.Pos.Sub(ship2.Pos).Len()/1000, len(projectiles))
 		}
+		frame := Frame{
+			T: t,
+			Ships: []ShipSnapshot{
+				{
+					Name:  ship1.Name,
+					X:     ship1.Pos.X,
+					Y:     ship1.Pos.Y,
+					Z:     ship1.Pos.Z,
+					HP:    ship1.Armor,
+					Alive: ship1.Alive,
+				},
+				{
+					Name:  ship2.Name,
+					X:     ship2.Pos.X,
+					Y:     ship2.Pos.Y,
+					Z:     ship2.Pos.Z,
+					HP:    ship2.Armor,
+					Alive: ship2.Alive,
+				},
+			},
+			Projectiles: make([]ProjectileSnapshot, 0, len(projectiles)),
+		}
+		for _, p := range projectiles {
+			if p.Alive {
+				frame.Projectiles = append(frame.Projectiles, ProjectileSnapshot{X: p.Pos.X, Y: p.Pos.Y, Z: p.Pos.Z})
+			}
+		}
+		if int(t*10)%10 == 0 { // или просто if tick % N == 0
+			frames = append(frames, frame)
+		}
 	}
 	fmt.Printf("\nФИНАЛ:\n")
 	fmt.Printf("%s: броня %.1f, живой: %v\n", ship1.Name, ship1.Armor, ship1.Alive)
 	fmt.Printf("%s: броня %.1f, живой: %v\n", ship2.Name, ship2.Armor, ship2.Alive)
+
+	f, err := os.Create("battle.json")
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(frames); err != nil {
+		panic(err)
+	}
+
 }
 
 // Манёвры: либо уклоняемся, либо летим к цели
